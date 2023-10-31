@@ -3,6 +3,8 @@
 
 from odoo import models, api, fields, _
 from odoo.exceptions import ValidationError
+import logging
+_logger = logging.getLogger(__name__)
 
 
 class AccountPaymentGroup(models.Model):
@@ -295,7 +297,7 @@ class AccountPaymentGroup(models.Model):
         self = self.with_context(
             active_model=self._name, active_id=self.id, active_ids=self.ids)
 
-        return self.env.ref('account_payment_group.action_report_payment_group').report_action(self)
+        return self.env.ref('account_payment_group.report_payment_group_action').report_action(self)
 
     @api.depends('company_id.double_validation', 'partner_type')
     def _compute_payment_subtype(self):
@@ -442,6 +444,8 @@ class AccountPaymentGroup(models.Model):
         3. do not check double validation
         TODO: may be we can improve code and actually do what we want for payments from payment groups"""
         created_automatically = self._context.get('created_automatically')
+        reconcile_only = self._context.get('reconcile_only', False)
+        reconcile_amount = self._context.get('reconcile_amount', False)
         posted_payment_groups = self.filtered(lambda x: x.state == 'posted')
         if posted_payment_groups:
             raise ValidationError(_(
@@ -489,8 +493,14 @@ class AccountPaymentGroup(models.Model):
             if not created_automatically:
                 counterpart_aml = rec.payment_ids.mapped('line_ids').filtered(
                     lambda r: not r.reconciled and r.account_id.internal_type in ('payable', 'receivable'))
+
+                if reconcile_only:
+                    counterpart_aml = rec.payment_ids.mapped('line_ids').filtered(
+                            lambda r: not r.reconciled and r.account_id.internal_type in (
+                            'payable', 'receivable') and r.credit == reconcile_amount)
                 if counterpart_aml and rec.to_pay_move_line_ids:
                     (counterpart_aml + (rec.to_pay_move_line_ids)).reconcile()
+
 
             rec.state = 'posted'
 
