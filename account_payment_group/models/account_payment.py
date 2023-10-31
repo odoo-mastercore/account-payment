@@ -14,7 +14,6 @@ class AccountPayment(models.Model):
     payment_group_id = fields.Many2one(
         'account.payment.group',
         'Payment Group',
-        ondelete='cascade',
         readonly=True,
     )
     amount_company_currency = fields.Monetary(
@@ -47,6 +46,39 @@ class AccountPayment(models.Model):
         compute='_compute_payment_method_description',
         string='Payment Method Desc.',
     )
+    available_journal_ids = fields.Many2many(
+        comodel_name='account.journal',
+        compute='_compute_available_journal_ids'
+    )
+
+    label_journal_id = fields.Char(
+        compute='_compute_label'
+    )
+
+    label_destination_journal_id = fields.Char(
+        compute='_compute_label'
+    )
+
+    @api.depends('payment_type', 'payment_group_id')
+    def _compute_available_journal_ids(self):
+        """
+        Este metodo odoo lo agrega en v16
+        Igualmente nosotros lo modificamos acá para que funcione con esta logica:
+        a) desde transferencias permitir elegir cualquier diario ya que no se selecciona compañía
+        b) desde grupos de pagos solo permitir elegir diarios de la misma compañía
+        NOTA: como ademas estamos mandando en el contexto del company_id, tal vez podriamos evitar pisar este metodo
+        y ande bien en v16 para que las lineas de pago de un payment group usen la compañia correspondiente, pero
+        lo que faltaria es hacer posible en las transferencias seleccionar una compañia distinta a la por defecto
+        """
+        journals = self.env['account.journal'].search([
+            ('company_id', 'in', self.env.companies.ids), ('type', 'in', ('bank', 'cash'))
+        ])
+        for pay in self:
+            filtered_domain = [('inbound_payment_method_line_ids', '!=', False)] if \
+                pay.payment_type == 'inbound' else [('outbound_payment_method_line_ids', '!=', False)]
+            if pay.payment_group_id:
+                filtered_domain.append(('company_id', '=', pay.payment_group_id.company_id.id))
+            pay.available_journal_ids = journals.filtered_domain(filtered_domain)
 
     @api.depends('payment_method_id')
     def _compute_payment_method_description(self):
@@ -129,32 +161,38 @@ class AccountPayment(models.Model):
                     rec.company_id, rec.date)
             rec.amount_company_currency = amount_company_currency
 
-    def _get_fields_to_valid(self):
-        fields = ['payment_group_id', 'is_internal_transfer']
-        if 'pos_session_id' in self.env['account.payment']._fields:
-            fields.append('pos_session_id')
-        return fields
-
     @api.model_create_multi
     def create(self, vals_list):
         """ If a payment is created from anywhere else we create the payment group in top """
         recs = super().create(vals_list)
-
-        fields_to_valid = self._get_fields_to_valid()
-
-        for rec in recs.filtered(lambda x: all(not getattr(x, field) for field in fields_to_valid)).\
-            with_context(created_automatically=True):
-            if not rec.partner_id:
-                raise ValidationError(_(
-                    'Manual payments should not be created manually but created from Customer Receipts / Supplier Payments menus'))
-            rec.payment_group_id = self.env['account.payment.group'].create({
-                'company_id': rec.company_id.id,
-                'partner_type': rec.partner_type,
-                'partner_id': rec.partner_id.id,
-                'payment_date': rec.date,
-                'communication': rec.ref,
-            })
-            rec.payment_group_id.post()
+        if 'pos_session_id' in self.env['account.payment']._fields:
+            for rec in recs.filtered(lambda x: not x.payment_group_id and not x.is_internal_transfer and not x.pos_session_id).with_context(
+                    created_automatically=True):
+                if not rec.partner_id:
+                    raise ValidationError(_(
+                        'Manual payments should not be created manually but created from Customer Receipts / Supplier Payments menus'))
+                rec.payment_group_id = self.env['account.payment.group'].create({
+                    'company_id': rec.company_id.id,
+                    'partner_type': rec.partner_type,
+                    'partner_id': rec.partner_id.id,
+                    'payment_date': rec.date,
+                    'communication': rec.ref,
+                })
+                rec.payment_group_id.post()
+        else:
+            for rec in recs.filtered(lambda x: not x.payment_group_id and not x.is_internal_transfer).with_context(
+                    created_automatically=True):
+                if not rec.partner_id:
+                    raise ValidationError(_(
+                        'Manual payments should not be created manually but created from Customer Receipts / Supplier Payments menus'))
+                rec.payment_group_id = self.env['account.payment.group'].create({
+                    'company_id': rec.company_id.id,
+                    'partner_type': rec.partner_type,
+                    'partner_id': rec.partner_id.id,
+                    'payment_date': rec.date,
+                    'communication': rec.ref,
+                })
+                rec.payment_group_id.post()
         return recs
 
     @api.depends('payment_group_id')
@@ -217,3 +255,29 @@ class AccountPayment(models.Model):
     def _get_trigger_fields_to_sincronize(self):
         res = super()._get_trigger_fields_to_sincronize()
         return res + ('force_amount_company_currency',)
+
+    @api.depends_context('default_is_internal_transfer')
+    def _compute_is_internal_transfer(self):
+        """ Este campo se recomputa cada vez que cambia un diario y queda en False porque el segundo diario no va a
+        estar completado. Como nosotros tenemos un menú especifico para poder registrar las transferencias internas,
+        entonces si estamos en este menu siempre es transferencia interna"""
+        if self._context.get('default_is_internal_transfer'):
+            self.is_internal_transfer = True
+        else:
+            return super()._compute_is_internal_transfer()
+
+    def _create_paired_internal_transfer_payment(self):
+        for rec in self:
+            super(AccountPayment, rec.with_context(
+                default_force_amount_company_currency=rec.force_amount_company_currency
+            ))._create_paired_internal_transfer_payment()
+
+    @api.onchange("payment_type")
+    def _compute_label(self):
+        for rec in self:
+            if rec.payment_type == "outbound":
+                rec.label_journal_id = "Diario de origen"
+                rec.label_destination_journal_id = "Diario de destino"
+            else:
+                rec.label_journal_id = "Diario de destino"
+                rec.label_destination_journal_id = "Diario de origen"
