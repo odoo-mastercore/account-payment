@@ -17,7 +17,9 @@ def post_init_hook(cr, registry):
     # without partner_id
     payments = env['account.payment'].search(
         [('partner_id', '!=', False), ('is_internal_transfer', '=', False)])
-
+    total_payments = len(payments)
+    count = 0
+    
     for payment in payments:
         count +=1
         _logger.info('Procesando %s de %s. Creando APG for payment %s, %s' % 
