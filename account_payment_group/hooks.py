@@ -31,4 +31,5 @@ def post_init_hook(cr, registry):
             'communication': payment.ref,
             'payment_ids': [(4, payment.id, False)],
             'state': _state,
+            'to_pay_move_line_ids': [(6, 0, to_pay_move_line_ids)], # To link existing asociated debs  
         })
