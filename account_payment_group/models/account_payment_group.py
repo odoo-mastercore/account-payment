@@ -483,7 +483,7 @@ class AccountPaymentGroup(models.Model):
             if not created_automatically:
                 rec.payment_ids.filtered(lambda x: x.state == 'draft').action_post()
             # escribimos despues del post para que odoo no renumere el payment
-            rec.payment_ids.name = rec.name
+            #rec.payment_ids.name = rec.name
 
             if not rec.receiptbook_id and not rec.name:
                 rec.name = any(
