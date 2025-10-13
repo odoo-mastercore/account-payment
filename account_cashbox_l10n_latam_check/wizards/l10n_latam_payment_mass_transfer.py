@@ -28,8 +28,10 @@ class L10nLatamPaymentMassTransfer(models.TransientModel):
     def _compute_cashbox_session_id(self):
         for rec in self:
             session_ids = self.env['account.cashbox.session'].search([
+                ('state', '=', 'opened'),
+                '|',
                 ('user_ids', '=', self.env.uid),
-                ('state', '=', 'opened')
+                ('user_ids', '=', False)
             ])
             if len(session_ids) == 1:
                 rec.cashbox_session_id = session_ids.id
@@ -40,6 +42,9 @@ class L10nLatamPaymentMassTransfer(models.TransientModel):
         self.ensure_one()
         if self.env.user.requiere_account_cashbox_session and not self.cashbox_session_id:
             raise UserError(_('Your user requires to use payment session on each tranfer'))
-        payments = super()._create_payments()
+        # Envio el contexto  paired_transfer en True para poder crear la
+        # transferencia son cashbox durante la creacion y setearla sobre
+        # la primera y no la paires
+        payments = super(L10nLatamPaymentMassTransfer, self.with_context(paired_transfer=True))._create_payments()
         payments.cashbox_session_id = self.cashbox_session_id.id
         return payments

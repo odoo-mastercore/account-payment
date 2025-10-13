@@ -25,7 +25,6 @@ class PopSessionJournalControl(models.Model):
 
     _sql_constraints = [('uniq_line', 'unique(cashbox_session_id, journal_id)', "Control line must be unique")]
 
-
     # @api.depends('cashbox_session_id.payment_ids.state', 'balance_start')
     # def _compute_amounts_old(self):
     #     # agrupamos por session porque lo mas usual es ver todos los registors de una misma session
@@ -50,9 +49,13 @@ class PopSessionJournalControl(models.Model):
         payments_lines = self.env['account.payment'].search([
                 ('cashbox_session_id', 'in', self.mapped('cashbox_session_id').ids), ('state', '=', 'posted')])
         for record in self:
-            amount = sum(payments_lines.filtered(
+            filtered_lines = payments_lines.filtered(
                 lambda p: p.cashbox_session_id == record.cashbox_session_id and p.journal_id == record.journal_id
-                ).mapped('amount_signed'))
+            )
+            if record.journal_id.currency_id:
+                amount = sum(filtered_lines.mapped('amount_signed'))
+            else:
+                amount = sum(filtered_lines.mapped('amount_company_currency_signed'))
             record.amount = amount
             record.balance_end = amount + record.balance_start
             self -= record
@@ -70,5 +73,4 @@ class PopSessionJournalControl(models.Model):
             rec.currency_id = rec.journal_id.currency_id or rec.journal_id.company_id.currency_id
 
     def action_session_payments(self):
-        view = self.env.ref('account.view_account_payment_tree')
         return self.with_context(search_default_journal_id=self.journal_id.id).cashbox_session_id.action_session_payments()

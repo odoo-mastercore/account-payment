@@ -30,8 +30,10 @@ class AccountPayment(models.Model):
     def _compute_cashbox_session_id(self):
         for rec in self:
             session_ids = self.env['account.cashbox.session'].search([
+                ('state', '=', 'opened'),
+                '|',
                 ('user_ids', '=', self.env.uid),
-                ('state', '=', 'opened')
+                ('user_ids', '=', False),
             ])
             if len(session_ids) == 1:
                 rec.cashbox_session_id = session_ids.id
@@ -40,10 +42,15 @@ class AccountPayment(models.Model):
 
     @api.constrains('journal_id', 'currency_id', 'cashbox_session_id')
     def check_journal_currency(self):
+        if self.env.context.get('bypass_journal_currency_cashbox'):
+            return
         for payment in self.filtered('cashbox_session_id'):
             if payment.journal_id.currency_id and payment.currency_id != payment.journal_id.currency_id:
                 raise ValidationError(
-                    _('The currency of the journal must be the of the payment.'))
+                    _('The currency of the journal must be the same of the payment.'))
+
+    def _create_paired_internal_transfer_payment(self):
+        super(AccountPayment, self.with_context(paired_transfer=True))._create_paired_internal_transfer_payment()
 
     def action_post(self):
         for rec in self:
@@ -53,7 +60,7 @@ class AccountPayment(models.Model):
                         rec.id, rec.cashbox_session_id.name
                     )))
 
-            if self.env.user.requiere_account_cashbox_session and not rec.cashbox_session_id:
+            if  not self.env.context.get('paired_transfer') and self.env.user.requiere_account_cashbox_session and not rec.cashbox_session_id:
                 raise UserError(_('Your user requires to use payment session on each payment'))
 
         super().action_post()

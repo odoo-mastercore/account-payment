@@ -2,7 +2,7 @@
 # For copyright and license notices, see __manifest__.py file in module root
 # directory
 ##############################################################################
-from odoo import models, fields, api
+from odoo import models, fields, api, _
 from odoo.tools import plaintext2html
 
 
@@ -19,15 +19,15 @@ class AccountMove(models.Model):
     @api.depends('transaction_ids.state')
     def _compute_payment_state(self):
         super()._compute_payment_state()
-        for rec in self.filtered(lambda x: x.payment_state=='not_paid' and {'done','pending','authorized'}.intersection(set(x.transaction_ids.mapped('state')))):
+        for rec in self.filtered(lambda x: x.payment_state=='not_paid' and {'pending','authorized'}.intersection(set(x.transaction_ids.mapped('state')))):
             rec.payment_state = 'electronic_pending'
 
-    def _post(self, soft=True):
-        res = super()._post(soft=soft)
+    def action_post(self):
+        res = super().action_post()
         to_pay_moves = self.filtered(
                 lambda x: x.payment_token_id and x.state == 'posted' and
                 x.payment_state in ['not_paid', 'electronic_pending'] and x.move_type == 'out_invoice')
-        to_pay_moves.create_electronic_payment()
+        to_pay_moves.sudo().create_electronic_payment()
         return res
 
     def create_electronic_payment(self):

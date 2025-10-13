@@ -1,7 +1,7 @@
 # © 2016 ADHOC SA
 # License AGPL-3.0 or later (http://www.gnu.org/licenses/agpl).
 
-from odoo import models, api, fields, _, Command
+from odoo import Command, _, api, fields, models
 from odoo.exceptions import ValidationError
 
 
@@ -9,7 +9,7 @@ class AccountPaymentGroup(models.Model):
     _name = "account.payment.group"
     _description = "Payment Group"
     _order = "payment_date desc, name desc"
-    _inherit = 'mail.thread'
+    _inherit = ['mail.thread', 'mail.activity.mixin']
     _check_company_auto = True
 
     name = fields.Char(string='Number', readonly=True, copy=False)
@@ -71,15 +71,9 @@ class AccountPaymentGroup(models.Model):
     commercial_partner_id = fields.Many2one(
         related='partner_id.commercial_partner_id',
     )
-    currency_id = fields.Many2one(
-        'res.currency',
-        string='Currency',
-        required=True,
-        default=lambda self: self.env.company.currency_id,
-        readonly=True,
-        states={'draft': [('readonly', False)]},
-        tracking=True,
-    )
+
+    currency_id = fields.Many2one('res.currency', related='company_id.currency_id', store=True)
+
     payment_date = fields.Date(
         string='Payment Date',
         required=True,
@@ -443,6 +437,18 @@ class AccountPaymentGroup(models.Model):
         2. do not reconcile (reconciled by super)
         3. do not check double validation
         TODO: may be we can improve code and actually do what we want for payments from payment groups"""
+
+        # En ciertos casos por redondeo genera el asiento aunque tenga activo el reconcile on company currency.
+        # Este contexto evita esos casos
+        if (
+                self.company_id.reconcile_on_company_currency
+                and not (
+                    self.partner_id.property_account_payable_id.currency_id
+                    or self.partner_id.property_account_receivable_id.currency_id
+                )
+            ):
+            self = self.with_context(no_exchange_difference=True)
+
         created_automatically = self._context.get('created_automatically')
         posted_payment_groups = self.filtered(lambda x: x.state == 'posted')
         if posted_payment_groups:
@@ -491,7 +497,7 @@ class AccountPaymentGroup(models.Model):
                     rec.payment_ids.mapped('name')) and ', '.join(
                     rec.payment_ids.mapped('name')) or False
 
-            # Filtro porque los pagos electronicos solo pueden estar en pending si la transaccion esta en pending 
+            # Filtro porque los pagos electronicos solo pueden estar en pending si la transaccion esta en pending
             # y no los puedo conciliar esto no es un comportamiento del core
             # sino que esta implementado en account_payment_ux
             posted_payments = rec.payment_ids.filtered(lambda x: x.state == 'posted')

@@ -253,11 +253,17 @@ class AccountPayment(models.Model):
             })
         return res
 
-    # @api.model
-    # def _get_trigger_fields_to_synchronize(self):
-    #     res = super()._get_trigger_fields_to_synchronize()
-    #     return res + ('force_amount_company_currency',)
-
+    @api.model
+    def _get_trigger_fields_to_synchronize(self):
+        res = super()._get_trigger_fields_to_synchronize()
+        # si bien es un metodo api.model usamos este hack para chequear si es la creacion de un payment que termina
+        # triggereando un write y luego llamando a este metodo y dando error, por ahora no encontramos una mejor forma
+        # esto esta ligado de alguna manera a un llamado que se hace dos veces por "culpa" del método
+        # "_inverse_amount_company_currency". Si bien no es elegante para todas las pruebas que hicimos funcionó bien.
+        if self.mapped('open_move_line_ids'):
+            return res + ('force_amount_company_currency',)
+        return res
+    
     @api.depends_context('default_is_internal_transfer')
     def _compute_is_internal_transfer(self):
         """ Este campo se recomputa cada vez que cambia un diario y queda en False porque el segundo diario no va a
@@ -283,3 +289,19 @@ class AccountPayment(models.Model):
             else:
                 rec.label_journal_id = "Diario de destino"
                 rec.label_destination_journal_id = "Diario de origen"
+
+    def action_draft(self):
+        # Seteamos posted_before en true para que nos permita pasar a borrador el pago y poder realizar cambio sobre el mismo
+        # Nos salteamos la siguente validacion
+        # https://github.com/odoo/odoo/blob/b6b90636938ae961c339807ea893cabdede9f549/addons/account/models/account_move.py#L2474
+        self.posted_before = False
+        super().action_draft()
+
+    def write(self, vals):
+        for rec in self:
+            # Lo siguiente lo evaluamos para evitar la validacion de odoo de 
+            # https://github.com/odoo/odoo/blob/b6b90636938ae961c339807ea893cabdede9f549/addons/account/models/account_move.py#L2476
+            # y permitirnos realizar la modificacion del journal.
+            if 'journal_id' in vals and rec.journal_id.id != vals['journal_id']:
+                rec.move_id.sequence_number = 0
+        return super().write(vals)
